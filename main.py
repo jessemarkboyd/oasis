@@ -25,6 +25,12 @@ if __name__ == "__main__":
     tsr_df.columns = new_header  # Set the header row as the dataframe header
     tsr_df.reset_index(drop=True, inplace=True)  # Reset the index
     tsr_df.columns = [col.strip() if isinstance(col, str) else col for col in tsr_df.columns]
+    # Eliminate Recalled transmission rights
+    recalled_tsrs = tsr_df[(tsr_df['Request Type'].str.strip().isin(['RECALL', 'REDIRECT'])) &
+                           (tsr_df['Status'].str.strip() == 'CONFIRMED')]['Related Ref'].to_list()
+    tsr_df = tsr_df[~tsr_df['Assign Ref'].isin(recalled_tsrs)]
+    tsr_df = tsr_df[tsr_df['Status'].str.strip() == 'CONFIRMED']
+    # Fill in missing POD or POR specification
     tsr_df['POD'] = tsr_df['POD'].fillna(tsr_df['Sink'])
     tsr_df['POR'] = tsr_df['POR'].fillna(tsr_df['Source'])
     # Convert Start Date and Stop Date to datetime format
@@ -41,7 +47,7 @@ if __name__ == "__main__":
 
     tsr_df['Path'] = tsr_df.apply(lambda x: describe_path(x), axis=1)
     analyses_list = select_from_listbox('What analysis would you like to perform?',
-                                        ['Timeline', 'Network'])
+                                        ['Timeline', 'Network'], multiple=True)
     if 'Timeline' in analyses_list:
         # Timeline requires a POD
         for pod in select_from_listbox('Select Point of Delivery', tsr_df['POD'].unique().tolist(), multiple=True):

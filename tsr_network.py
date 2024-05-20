@@ -1,7 +1,9 @@
 """Plot network of transmission rights."""
 import networkx as nx
-import matplotlib.pyplot as plt
 import pandas as pd
+from pyvis.network import Network
+from tkinter import filedialog
+import tkinter as tk
 
 
 def plot_tsr_network(df, customer, dt=pd.Timestamp(year=2024, month=1, day=1)):
@@ -9,48 +11,61 @@ def plot_tsr_network(df, customer, dt=pd.Timestamp(year=2024, month=1, day=1)):
     # Create a directional network of transmission rights
     G = nx.MultiDiGraph()
     tsr_df = df[df['Customer'] == customer]
-    # G['Customer'] = customer
-    # G['Year'] = year
+    tsr_df.to_csv('Network Data.csv')
+    tsr_df = tsr_df[tsr_df['MW Grant'] > 0]
     tsr_df = tsr_df[(tsr_df['Start Time'] <= dt) & (dt <= tsr_df['Stop Time'])]
+    tsr_df = tsr_df.groupby(['TP', 'POD', 'POR', 'Path']).agg({
+        'MW Grant': 'sum',  # Sum the values in 'MW Grant'
+        'Assign Ref': lambda x: ','.join(x.astype(str))  # Concatenate the strings in 'Assign Ref'
+    }).reset_index()
     for i, row in tsr_df.iterrows():
-        G.add_edge(row['POR'], row['POD'], **row.to_dict())
+        G.add_edge(row['POR'], row['POD'], **{'MW': row['MW Grant'], 'TP': row['TP'], 'Path': row['Path'],
+                                              'Assigned Ref': row['Assign Ref']})
     # Find the component networks
     components = nx.weakly_connected_components(G)
     # Plot each component as a subgraph
     for i, component in enumerate(components):
         subgraph = G.subgraph(component)
-        # Compute the layout
-        pos = nx.spring_layout(subgraph, seed=42)
-        edge_widths = {}
-        for u, v in subgraph.edges():
-            edge_widths[(u,v)] = subgraph.edges
-        edge_widths = [subgraph.edges[u][v]['MW Grant'] * 0.01 for u, v in subgraph.edges()]
 
-        # To handle multiple edges and their widths, iterate over each edge including keys
-        # Draw the graph
-        nx.draw_networkx_nodes(subgraph, pos, node_color='lightblue', node_size=200)
-        nx.draw_networkx_labels(subgraph, pos)
-        nx.draw_networkx_edges(subgraph, pos , edgelist=subgraph.edges(), width=[w * 0.1 for w in avg_weights.values()],
-        #                        arrowstyle='-|>', arrowsize=10, edge_color='gray')
-        # edge_widths = [subgraph[u][v]['mw'] * 0.1 for u, v in subgraph.edges()]
-        # # Draw the graph
-        # nx.draw_networkx(G, pos, arrows=True, node_size=700, width=edge_widths, arrowsize=20, node_color='lightblue',
-        #                  edge_color='gray')
-        # nx.draw(subgraph, with_labels=True, node_color=f"C{i}")
+        # Create a PyVis network from the existing MultiDiGraph
+        net = Network(notebook=False, directed=True)
+        # net.from_nx(subgraph)
+        # # Adjust the physics layout to spread out nodes (optional)
+        net.toggle_physics(False)
+        net.set_options("""
+        {
+          "nodes": {
+            "physics": false
+          },
+          "interaction": {
+            "dragNodes": true,
+            "dragView": true,
+            "zoomView": true
+          }
+        }
+        """)
 
-    # def networkx_plot(self, bus_list):
-    #     self.H = self.G.subgraph(bus_list)
-    #     relabel_dict = dict(zip(tuple(self.H.nodes), [n.EXNAME for n in list(self.H.nodes)]))
-    #     self.H = nx.relabel_nodes(self.H, relabel_dict)
-    #     nx.draw_networkx(self.H, with_labels=True,
-    #                      node_color=[self.H.nodes.data()[node_name]['color'] if 'color' in self.H.nodes.data()[node_name] else 'purple' for node_name in self.H.nodes])
-    #
-    # def networkx_get_neighboring_buses(self, bus, x: int) -> list:
-    #     neighbors = [bus]
-    #     new_neighbors = neighbors
-    #     while len(new_neighbors) > 0:
-    #         for n in neighbors:
-    #             new_neighbors = [x for x in self.G.neighbors(n) if x not in neighbors]
-    #         neighbors.extend(new_neighbors)
-    #     return neighbors
+        # Manually add nodes and edges to allow setting edge labels
+        for node in subgraph.nodes():
+            net.add_node(node)
 
+        # Manually add edges to control widths based on 'MW Grant'
+        for source, target, data in subgraph.edges(data=True):
+            width = data.get('MW', 1)  # Default to 1 if 'MW Grant' not found
+            tp = data.get('TP', 'Unknown')
+            path = data.get('Path', 'Unknown')
+            ref = data.get('Assigned Ref')
+            title = f"{path} {tp}--{ref}: {width} MW"  # Tooltip title
+            label = str(width) + ' MW'  # Optionally set label to 'MW Grant' value
+            # Add edge with specified width, title (for tooltip), and label
+            net.add_edge(source, target, title=title, width=width * 0.005, label=label)
+        # Generate and save the interactive plot to an HTML file
+        net.show(f'my_graph_{i}.html')
+
+
+if __name__ == '__main__':
+    root = tk.Tk()
+    tsr_csv = filedialog.askopenfilename(title='Select the Oasis TSR csv (post-processed)',
+                                         filetypes=[('Comma Delimited', '*.csv')])
+    root.destroy()
+    tsr_df = pd.read_excel(tsr_csv, header=None)
